@@ -42,6 +42,23 @@ npm start
 By default, the server will start on port **5111**.
 Output should show: `AXION is running on port: 5111` and `MongoDB Connected`.
 
+## API Documentation (Postman)
+
+A full Postman Collection is included in this repository to facilitate testing all API endpoints.
+
+**File:** [`postman_collection.json`](./postman_collection.json)
+
+### How to Import:
+1. Open Postman.
+2. Click **Import** in the top-left corner.
+3. Drag and drop the `postman_collection.json` file.
+4. The collection **"School Management API"** will appear in your sidebar.
+5. **Environment**: The collection comes with a pre-configured `baseUrl` variable set to `http://localhost:5111`.
+
+### Using the Collection:
+- Use **Auth / Login** request first. The test script automatically captures the JWT token and saves it to the `token` variable for subsequent requests.
+- Ensure you have created a Superadmin user first via **Auth / Signup**.
+
 ## Testing
 
 ### Running Unit Tests
