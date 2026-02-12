@@ -1,0 +1,168 @@
+const request = require('supertest');
+const mongoose = require('mongoose');
+const { expect } = require('chai');
+// Use a local test DB instead of memory server for reliability in this env
+const TEST_MONGO_URI = 'mongodb://localhost:27017/school_management_test?authSource=admin';
+
+// Mock Config to use Test DB
+const config = require('../config/index.config');
+config.dotEnv.MONGO_URI = TEST_MONGO_URI;
+
+const ManagersLoader = require('../loaders/ManagersLoader');
+const managersLoader = new ManagersLoader({ config });
+const managers = managersLoader.load();
+const app = require('express')();
+
+// Setup App for Testing (Replicate UserServer logic without starting server)
+const express = require('express');
+const cors = require('cors');
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+const authMw = managers.mws.auth;
+
+/** API Routes Mirror */
+app.post('/api/auth/signup', (req, res) => managers.user.createUser(req, res));
+app.post('/api/auth/login', (req, res) => managers.user.login(req, res));
+app.post('/api/schools', authMw, (req, res) => managers.school.create(req, res));
+app.get('/api/schools', authMw, (req, res) => managers.school.list(req, res));
+app.post('/api/classrooms', authMw, (req, res) => managers.classroom.create(req, res));
+app.get('/api/classrooms', authMw, (req, res) => managers.classroom.list(req, res));
+app.post('/api/students', authMw, (req, res) => managers.student.create(req, res));
+app.get('/api/students', authMw, (req, res) => managers.student.list(req, res));
+
+// Error Handler
+app.use((err, req, res, next) => {
+    console.error(err.stack)
+    res.status(500).send('Something broke!')
+});
+
+
+describe('School Management API Integration', function () {
+    this.timeout(5000); // Increase timeout for integration tests
+    let superadminToken;
+    let schoolAdminToken;
+    let schoolId;
+    let classroomId;
+
+    before(async () => {
+        if (mongoose.connection.readyState === 0) {
+            await mongoose.connect(TEST_MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        }
+        await mongoose.connection.db.dropDatabase();
+    });
+
+    after(async () => {
+        await mongoose.connection.db.dropDatabase();
+        await mongoose.connection.close();
+    });
+
+    /** AUTH TESTS */
+    describe('Authentication', () => {
+        it('should signup a superadmin', async () => {
+            const res = await request(app)
+                .post('/api/auth/signup')
+                .send({
+                    username: 'superadmin_test',
+                    email: 'super@test.com',
+                    password: 'password123',
+                    role: 'SUPERADMIN'
+                });
+            expect(res.statusCode).to.equal(201);
+            expect(res.body.ok).to.be.true;
+            expect(res.body.data.user.role).to.equal('SUPERADMIN');
+        });
+
+        it('should login superadmin', async () => {
+            const res = await request(app)
+                .post('/api/auth/login')
+                .send({ email: 'super@test.com', password: 'password123' });
+            expect(res.statusCode).to.equal(200);
+            superadminToken = res.body.data.token;
+            expect(superadminToken).to.exist;
+        });
+    });
+
+    /** SCHOOL TESTS */
+    describe('School Management', () => {
+        it('should create a school (Superadmin)', async () => {
+            const res = await request(app)
+                .post('/api/schools')
+                .set('Authorization', `Bearer ${superadminToken}`)
+                .send({
+                    name: 'Test High School',
+                    address: '123 Test Lane',
+                    contactEmail: 'contact@test.com'
+                });
+            expect(res.statusCode).to.equal(201);
+            schoolId = res.body.data._id;
+            expect(schoolId).to.exist;
+        });
+
+        it('should list schools', async () => {
+            const res = await request(app)
+                .get('/api/schools')
+                .set('Authorization', `Bearer ${superadminToken}`);
+            expect(res.statusCode).to.equal(200);
+            expect(res.body.data.length).to.be.greaterThan(0);
+        });
+    });
+
+    /** CLASSROOM & STUDENT TESTS */
+    describe('Classroom & Student Management', () => {
+        it('should signup a school admin linked to the school', async () => {
+            const res = await request(app)
+                .post('/api/auth/signup')
+                .send({
+                    username: 'principal_test',
+                    email: 'principal@test.com',
+                    password: 'password123',
+                    role: 'SCHOOL_ADMIN',
+                    schoolId: schoolId
+                });
+            expect(res.statusCode).to.equal(201);
+        });
+
+        it('should login school admin', async () => {
+            const res = await request(app)
+                .post('/api/auth/login')
+                .send({ email: 'principal@test.com', password: 'password123' });
+            expect(res.statusCode).to.equal(200);
+            schoolAdminToken = res.body.data.token;
+        });
+
+        it('should create a classroom (School Admin)', async () => {
+            const res = await request(app)
+                .post('/api/classrooms')
+                .set('Authorization', `Bearer ${schoolAdminToken}`)
+                .send({
+                    name: 'Math 101',
+                    grade: '10',
+                    capacity: 25
+                });
+            expect(res.statusCode).to.equal(201);
+            classroomId = res.body.data._id;
+        });
+
+        it('should enroll a student (School Admin)', async () => {
+            const res = await request(app)
+                .post('/api/students')
+                .set('Authorization', `Bearer ${schoolAdminToken}`)
+                .send({
+                    name: 'Student One',
+                    age: 15,
+                    classroomId: classroomId
+                });
+            expect(res.statusCode).to.equal(201);
+            expect(res.body.data.name).to.equal('Student One');
+        });
+
+        it('should list students', async () => {
+            const res = await request(app)
+                .get('/api/students')
+                .set('Authorization', `Bearer ${schoolAdminToken}`);
+            expect(res.statusCode).to.equal(200);
+            expect(res.body.data.length).to.equal(1);
+        });
+    });
+});
